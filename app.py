@@ -524,12 +524,24 @@ def make_report(event: Dict[str, Any], db: Dict[str, Any]) -> bytes:
     return content.encode("utf-8")
 
 
-@st.dialog("Event Details", width="large")
+@st.dialog("تفاصيل الفعالية" if is_ar else "Event Details", width="large")
 def event_details_dialog(event_id: str):
-    db = load_db()
+    # The dashboard may be showing in-memory demo events when the persistent DB is empty.
+    # Re-apply the same seed logic inside the dialog so the clicked card can always be resolved.
+    db = ensure_seed(load_db())
     event = find_event(db, event_id)
+
+    # Extra resilience: use the exact dashboard snapshot from this session if available.
     if not event:
-        st.error("Event not found")
+        dashboard_db = st.session_state.get("dashboard_db")
+        if isinstance(dashboard_db, dict):
+            fallback_event = find_event(dashboard_db, event_id)
+            if fallback_event:
+                db = deepcopy(dashboard_db)
+                event = find_event(db, event_id)
+
+    if not event:
+        st.error("تعذر العثور على الفعالية. حدّث الصفحة ثم حاول مرة أخرى." if is_ar else "Event not found. Refresh the page and try again.")
         return
 
     top1, top2 = st.columns([3, 1])
@@ -640,6 +652,8 @@ def event_details_dialog(event_id: str):
 
 
 def assistant_dashboard(db: Dict[str, Any]) -> None:
+    # Keep the exact data rendered on the board so modal actions resolve the same event.
+    st.session_state.dashboard_db = deepcopy(db)
     events = db.get("events", [])
     st.markdown(f'<div class="section-title">{tx("dashboard")}</div><div class="section-hint">{tx("workflow")}</div>', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)

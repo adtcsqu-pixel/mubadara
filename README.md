@@ -97,3 +97,9 @@ admin_user = "your-admin"
 admin_password = "your-strong-password"
 allow_default_admin = false
 ```
+
+
+## V7 fix
+- Fixed `Event not found` when opening details for demo events shown on an empty data store.
+- Event Details now resolves the same seeded/session event data rendered by the dashboard.
+- Dialog title and missing-event message respect AR/EN.
