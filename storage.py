@@ -214,37 +214,104 @@ class GitHubStorage:
         return response.json()
 
     def _put_file(self, path: str, content: bytes, message: str) -> None:
+        """Create or update a file through GitHub's Contents API.
+
+        GitHub requires the current blob SHA when replacing an existing file.
+        A surprisingly common case is that a first metadata lookup briefly
+        returns 404 (or sees an older branch state), then the following PUT sees
+        the file and returns 422: "sha wasn't supplied".  We recover from that
+        automatically by refreshing the file metadata and retrying once.
+        We also retry once on stale-SHA conflicts.
+        """
+        branch = self._resolve_branch()
+
+        def build_payload(current: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+            payload: Dict[str, Any] = {
+                "message": message,
+                "content": base64.b64encode(content).decode("ascii"),
+            }
+            if branch:
+                payload["branch"] = branch
+            if current and current.get("sha"):
+                payload["sha"] = current["sha"]
+            return payload
+
         current = self._get_file(path)
-        payload: Dict[str, Any] = {
-            "message": message,
-            "content": base64.b64encode(content).decode("ascii"),
-        }
+        payload = build_payload(current)
+        url = f"{self.api}/contents/{path}"
 
-        # Empty repositories have no branch reference yet. Omitting `branch`
-        # lets GitHub initialize the repository's default branch on first write.
-        branch = self._resolved_branch
-        if branch:
-            payload["branch"] = branch
-        if current and current.get("sha"):
-            payload["sha"] = current["sha"]
+        for attempt in range(2):
+            try:
+                response = requests.put(url, headers=self.headers, json=payload, timeout=30)
+            except requests.RequestException as exc:
+                self._last_write_error = f"GitHub connection failed: {exc}"
+                raise StorageError(self._last_write_error) from exc
 
-        try:
-            self._request("PUT", f"{self.api}/contents/{path}", json=payload)
-            self._last_write_error = ""
-        except StorageError as exc:
-            self._last_write_error = str(exc)
-            # GitHub commonly returns 404 for private repositories when a token
-            # lacks the required fine-grained Contents: write permission.  Keep
-            # the message actionable and never expose the token itself.
-            msg = str(exc)
-            if "404" in msg:
-                raise StorageError(
+            if response.status_code < 400:
+                self._last_write_error = ""
+                # Keep the SHA returned by GitHub available for an immediate
+                # second write in the same rerun/session.
+                try:
+                    body = response.json()
+                    new_sha = ((body.get("content") or {}).get("sha") or "").strip()
+                    if new_sha:
+                        payload["sha"] = new_sha
+                except Exception:
+                    pass
+                break
+
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = {}
+            detail = str(error_body.get("message") or response.text[:250] or "GitHub error")
+            errors = error_body.get("errors") or []
+            errors_text = " ".join(str(item) for item in errors)
+            combined = f"{detail} {errors_text}".lower()
+
+            # Existing file but no SHA (422) OR stale SHA/conflict (409/422):
+            # refresh the metadata and retry the update exactly once.
+            needs_sha_retry = (
+                response.status_code in {409, 422}
+                and (
+                    "sha" in combined
+                    or "does not match" in combined
+                    or "wasn't supplied" in combined
+                    or "already exists" in combined
+                    or response.status_code == 409
+                )
+            )
+            if attempt == 0 and needs_sha_retry:
+                refreshed = self._get_file(path)
+                if refreshed and refreshed.get("sha"):
+                    payload = build_payload(refreshed)
+                    continue
+
+            if response.status_code == 404:
+                msg = (
                     f"GitHub write failed for '{self.repo}'. The repository may be private, "
                     "the repo value may be wrong, or the token may not have Contents: Read and write. "
                     "Verify that the token is explicitly allowed to this repository and that branch "
-                    f"'{self.branch}' exists (or leave an empty repository to be initialized)."
-                ) from exc
-            raise
+                    f"'{self.branch}' exists."
+                )
+            elif response.status_code == 403:
+                msg = (
+                    "GitHub API 403: the repository is readable, but this token cannot write. "
+                    "Grant Repository permissions > Contents: Read and write for this repository."
+                )
+            elif response.status_code == 422 and "sha" in combined:
+                msg = (
+                    "GitHub rejected the update because the current file SHA could not be resolved. "
+                    "The app refreshed the file metadata and retried, but GitHub still rejected it. "
+                    f"Details: {detail}"
+                )
+            else:
+                msg = f"GitHub API {response.status_code}: {detail}"
+
+            self._last_write_error = msg
+            raise StorageError(msg)
+        else:
+            raise StorageError("GitHub write retry exhausted")
 
         # The first write to an empty repository creates its default branch.
         if self._repo_is_empty:
