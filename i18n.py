@@ -1,8 +1,8 @@
 TRANSLATIONS = {
     "ar": {
         "language": "EN",
-        "title": "مكتب مساعد العميد للتدريب وخدمة المجتمع - نظام مبادرة",
-        "subtitle": "نظام إدارة الفعاليات والمبادرات الأكاديمية",
+        "title": "مكتب مساعد العميد وخدمة المجتمع",
+        "subtitle": "نظام مبادرة",
         "university": "جامعة السلطان قابوس · كلية الاقتصاد والعلوم السياسية",
         "login": "تسجيل الدخول",
         "login_hint": "أدخل بياناتك للوصول إلى النظام",
@@ -93,8 +93,8 @@ TRANSLATIONS = {
     },
     "en": {
         "language": "AR",
-        "title": "Office of the Assistant Dean for Training and Community Service - Mubadara System",
-        "subtitle": "Academic Event & Initiative Management System",
+        "title": "Office of the Assistant Dean for Community Service",
+        "subtitle": "Mubadara System",
         "university": "Sultan Qaboos University · College of Economics and Political Science",
         "login": "Sign in",
         "login_hint": "Enter your credentials to access the system",

@@ -168,22 +168,24 @@ def inject_css() -> None:
         [data-testid="stFileUploaderDropzone"] {{ border-radius:16px; border-color:#D9C483; background:#FFFCF5; }}
         [data-testid="stDialog"] > div {{ border-radius:22px !important; }}
         .login-shell {{ max-width:760px; margin:2vh auto 0; }}
-        .login-logo-wrap {{ display:flex; justify-content:center; align-items:center; min-height:132px; padding:6px 0 10px; }}
-        .login-logo {{ width:126px; height:126px; object-fit:contain; display:block; filter:drop-shadow(0 8px 18px rgba(11,35,65,.10)); }}
-        .login-brand {{ max-width:1040px; margin:0 auto 18px; text-align:center; }}
-        .login-brand .brand-kicker, .login-brand .brand-title, .login-brand .brand-subtitle {{ text-align:center; }}
+        .official-logo-wrap {{ display:flex; justify-content:center; align-items:center; width:100%; padding:4px 0 8px; }}
+        .official-logo {{ width:min(760px, 92vw); height:auto; object-fit:contain; display:block; margin:0 auto; }}
+        .office-heading {{ text-align:center; margin:8px auto 22px; }}
+        .office-title {{ color:{NAVY}; font-size:clamp(1.2rem, 2.4vw, 1.8rem); font-weight:800; line-height:1.5; }}
+        .office-subtitle {{ color:{GOLD}; font-size:.98rem; font-weight:800; margin-top:2px; }}
         .login-controls {{ margin-bottom:4px; }}
         .login-title {{ color:{NAVY}; font-weight:800; font-size:1.5rem; text-align:center; margin-bottom:4px; }}
         .login-hint {{ color:#667085; text-align:center; margin-bottom:18px; }}
         .sync-ok {{ color:#137333; font-weight:700; font-size:.82rem; }}
         .sync-local {{ color:#B54708; font-weight:700; font-size:.82rem; }}
+        .sync-error {{ color:#B42318; font-weight:700; font-size:.82rem; }}
         @keyframes fadein {{ from {{ opacity:0; transform:translateY(4px); }} to {{ opacity:1; transform:none; }} }}
         [data-testid="stMainBlockContainer"] {{ animation:fadein .25s ease; }}
         @media (max-width: 768px) {{
           .block-container {{ padding-left:.8rem; padding-right:.8rem; }}
           .brand-header {{ border-radius:16px; padding:13px; }}
-          .login-logo-wrap {{ min-height:104px; padding-top:0; }}
-          .login-logo {{ width:96px; height:96px; }}
+          .official-logo {{ width:min(100%, 680px); }}
+          .office-heading {{ margin-bottom:16px; }}
           .section-card {{ border-radius:16px; padding:14px; }}
           .event-card {{ min-height:auto; }}
         }}
@@ -224,6 +226,13 @@ def load_db() -> Dict[str, Any]:
         return storage.load_db()
     except StorageError as exc:
         st.error(f"{tx('storage_error')}: {exc}")
+        if storage.mode == "github":
+            if is_ar:
+                st.info("تحقق من Streamlit Secrets: اسم المستودع بصيغة owner/repo، والفرع main، وأن GitHub Token لديه صلاحية Contents: Read and write. إذا كان المستودع جديداً وفارغاً، هذه النسخة تهيئه تلقائياً عند أول حفظ.")
+            else:
+                st.info("Check Streamlit Secrets: repository must be owner/repo, branch main, and the GitHub token needs Contents: Read and write. If the repository is new and empty, this version initializes it automatically on the first write.")
+        if st.button("إعادة المحاولة" if is_ar else "Retry", key="storage_retry"):
+            st.rerun()
         st.stop()
 
 
@@ -286,62 +295,61 @@ def ensure_seed(db: Dict[str, Any]) -> Dict[str, Any]:
     return db
 
 
+def storage_status() -> tuple[bool, str]:
+    try:
+        if hasattr(storage, "healthcheck"):
+            return storage.healthcheck()
+        return True, storage.mode
+    except Exception as exc:
+        return False, str(exc)
+
+
+def render_official_brand() -> None:
+    logo_uri = image_data_uri("assets/official-logo.png")
+    if logo_uri:
+        st.markdown(
+            f'<div class="official-logo-wrap"><img class="official-logo" src="{logo_uri}" alt="Official logo"></div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.image("assets/official-logo.png", use_container_width=True)
+    brand_html = (
+        '<div class="office-heading">'
+        f'<div class="office-title">{html.escape(tx("title"))}</div>'
+        f'<div class="office-subtitle">{html.escape(tx("subtitle"))}</div>'
+        '</div>'
+    )
+    st.markdown(brand_html, unsafe_allow_html=True)
+
+
 def header() -> None:
-    # Login page: keep the university/college emblem visually centered.
-    if not st.session_state.role:
-        c_lang, c_logo, c_sync = st.columns([1.25, 4.5, 1.25], vertical_alignment="center")
-        with c_lang:
-            if st.button(tx("language"), use_container_width=True, key="lang_toggle"):
-                st.session_state.lang = "en" if lang == "ar" else "ar"
-                st.rerun()
-        with c_logo:
-            logo_uri = image_data_uri("assets/squ-ceps-emblem.png")
-            if logo_uri:
-                st.markdown(
-                    f'<div class="login-logo-wrap"><img class="login-logo" src="{logo_uri}" alt="SQU CEPS logo"></div>',
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.image("assets/squ-ceps-emblem.png", width=120)
-        with c_sync:
-            sync_class = "sync-ok" if storage.mode == "github" else "sync-local"
-            sync_text = tx("connected") if storage.mode == "github" else tx("local_mode")
-            st.markdown(f'<div class="{sync_class}">● {tx("github_sync")}: {sync_text}</div>', unsafe_allow_html=True)
-
-        st.markdown(
-            f"""<div class="brand-header login-brand">
-              <div class="brand-kicker">{html.escape(tx('university'))}</div>
-              <div class="brand-title">{html.escape(tx('title'))}</div>
-              <div class="brand-subtitle">{html.escape(tx('subtitle'))}</div>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-        return
-
-    # Authenticated views retain a compact navigation header.
-    c_logo, c_text, c_lang = st.columns([1.1, 7, 1.2], vertical_alignment="center")
-    with c_logo:
-        st.image("assets/squ-ceps-emblem.png", width=92)
-    with c_text:
-        st.markdown(
-            f"""<div class="brand-header">
-              <div class="brand-kicker">{html.escape(tx('university'))}</div>
-              <div class="brand-title">{html.escape(tx('title'))}</div>
-              <div class="brand-subtitle">{html.escape(tx('subtitle'))}</div>
-            </div>""",
-            unsafe_allow_html=True,
-        )
+    # Keep controls compact while the supplied official logo stays centered.
+    c_lang, c_space, c_sync = st.columns([1.2, 5.6, 1.5], vertical_alignment="center")
     with c_lang:
         if st.button(tx("language"), use_container_width=True, key="lang_toggle"):
             st.session_state.lang = "en" if lang == "ar" else "ar"
             st.rerun()
-        sync_class = "sync-ok" if storage.mode == "github" else "sync-local"
-        sync_text = tx("connected") if storage.mode == "github" else tx("local_mode")
-        st.markdown(f'<div class="{sync_class}">● {tx("github_sync")}: {sync_text}</div>', unsafe_allow_html=True)
-        if st.button(tx("logout"), use_container_width=True, key="logout"):
+        if st.session_state.role and st.button(tx("logout"), use_container_width=True, key="logout"):
             st.session_state.role = None
             st.session_state.selected_event = None
             st.rerun()
+    with c_sync:
+        ok, detail = storage_status()
+        if storage.mode == "local":
+            css_class = "sync-local"
+            sync_text = tx("local_mode")
+        elif ok:
+            css_class = "sync-ok"
+            sync_text = tx("connected")
+        else:
+            css_class = "sync-error"
+            sync_text = "غير متصل" if is_ar else "Not connected"
+        st.markdown(f'<div class="{css_class}">● {tx("github_sync")}: {sync_text}</div>', unsafe_allow_html=True)
+        if not ok and storage.mode == "github":
+            with st.expander("تفاصيل الاتصال" if is_ar else "Connection details"):
+                st.caption(detail)
+
+    render_official_brand()
 
 
 def login_view() -> None:
@@ -712,6 +720,6 @@ else:
         placeholder_role(db)
 
 st.markdown(
-    f"<div style='text-align:center;color:#98A2B3;font-size:.78rem;margin-top:30px'>{html.escape(tx('university'))} · Mubadara</div>",
+    f"<div style='text-align:center;color:#98A2B3;font-size:.78rem;margin-top:30px'>{html.escape(tx('title'))} · {html.escape(tx('subtitle'))}</div>",
     unsafe_allow_html=True,
 )
