@@ -75,3 +75,25 @@ admin_password = "YOUR_STRONG_PASSWORD"
 ```
 
 > قبل الاستخدام الرسمي يجب تغيير كلمة المرور الافتراضية وعدم نشرها داخل المستودع.
+
+
+## تسجيل دخول الإدارة - Admin Login
+
+بيانات الدخول الافتراضية للتجربة:
+
+```text
+Username: admin
+Password: Mubadara@2026
+```
+
+إذا كانت Streamlit Secrets تحتوي قيماً تجريبية مثل `YOUR_ADMIN_USER` أو `YOUR_STRONG_PASSWORD`،
+يتجاهلها النظام تلقائياً ويستخدم البيانات الافتراضية أعلاه لمنع قفل حساب الإدارة.
+
+للاستخدام الرسمي، عيّن بياناتك الخاصة ثم عطّل الحساب الافتراضي:
+
+```toml
+[auth]
+admin_user = "your-admin"
+admin_password = "your-strong-password"
+allow_default_admin = false
+```

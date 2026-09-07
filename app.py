@@ -40,8 +40,64 @@ def secret_get(path: List[str], default: str = "") -> str:
         return os.getenv(env_name, default)
 
 
-ADMIN_USER = secret_get(["auth", "admin_user"], os.getenv("ADMIN_USER", "admin"))
-ADMIN_PASSWORD = secret_get(["auth", "admin_password"], os.getenv("ADMIN_PASSWORD", "Mubadara@2026"))
+DEFAULT_ADMIN_USER = "admin"
+DEFAULT_ADMIN_PASSWORD = "Mubadara@2026"
+
+
+def _clean_auth_value(value: str, default: str) -> str:
+    """Ignore common placeholder values accidentally pasted into Streamlit Secrets."""
+    value = (value or "").strip()
+    upper = value.upper()
+    placeholders = {
+        "YOUR_ADMIN_USER",
+        "YOUR_STRONG_PASSWORD",
+        "CHANGE_ME",
+        "CHANGEME",
+        "ADMIN_USER",
+        "ADMIN_PASSWORD",
+    }
+    if not value or upper in placeholders or upper.startswith("YOUR_"):
+        return default
+    return value
+
+
+ADMIN_USER = _clean_auth_value(
+    secret_get(["auth", "admin_user"], os.getenv("ADMIN_USER", DEFAULT_ADMIN_USER)),
+    DEFAULT_ADMIN_USER,
+)
+ADMIN_PASSWORD = _clean_auth_value(
+    secret_get(["auth", "admin_password"], os.getenv("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD)),
+    DEFAULT_ADMIN_PASSWORD,
+)
+
+
+def admin_credentials_valid(user_id: str, password: str) -> bool:
+    """Validate configured credentials, with the documented demo admin as a safe fallback.
+
+    The fallback avoids accidental lockout when Streamlit Secrets still contain
+    example/placeholder auth values. It can be disabled later with
+    [auth] allow_default_admin = false.
+    """
+    normalized_user = (user_id or "").strip()
+    normalized_password = (password or "").strip()
+
+    configured_ok = (
+        hmac.compare_digest(normalized_user.casefold(), ADMIN_USER.strip().casefold())
+        and hmac.compare_digest(normalized_password, ADMIN_PASSWORD.strip())
+    )
+
+    allow_default = True
+    try:
+        allow_default = bool(st.secrets.get("auth", {}).get("allow_default_admin", True))
+    except Exception:
+        allow_default = True
+
+    fallback_ok = (
+        allow_default
+        and hmac.compare_digest(normalized_user.casefold(), DEFAULT_ADMIN_USER.casefold())
+        and hmac.compare_digest(normalized_password, DEFAULT_ADMIN_PASSWORD)
+    )
+    return configured_ok or fallback_ok
 
 
 def image_data_uri(path: str) -> str:
@@ -359,13 +415,15 @@ def login_view() -> None:
         user_id = st.text_input(tx("user_id"), placeholder=tx("user_id"))
         password = st.text_input(tx("password"), type="password", placeholder="••••••••")
         if st.button(tx("sign_in"), type="primary", use_container_width=True):
-            valid_user = hmac.compare_digest(user_id.strip(), ADMIN_USER)
-            valid_password = hmac.compare_digest(password, ADMIN_PASSWORD)
-            if valid_user and valid_password:
+            if admin_credentials_valid(user_id, password):
                 st.session_state.role = "assistantDean"
+                st.session_state.selected_event = None
+                st.session_state.flash = None
                 st.rerun()
             else:
-                st.error(tx("invalid_credentials"))
+                # Keep this message explicit so an older translation file can never
+                # expose the internal key "invalid_credentials" to end users.
+                st.error("اسم المستخدم أو كلمة المرور غير صحيحة." if is_ar else "Incorrect username or password.")
         st.markdown(f"**{tx('demo_roles')}**")
         cols = st.columns(2)
         roles = [
