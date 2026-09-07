@@ -314,11 +314,16 @@ def save_db(db: Dict[str, Any], message: str) -> bool:
         return True
     except Exception as exc:
         _remember_unsynced_db(db, str(exc))
+        detail = str(exc)
         st.error(
-            ("تعذر الحفظ في GitHub. التغييرات موجودة مؤقتاً في هذه الجلسة فقط حتى يتم إصلاح إعدادات GitHub."
+            ("تعذر الحفظ في GitHub. الاتصال للقراءة يعمل، لكن صلاحية الكتابة غير متاحة أو غير صحيحة. "
+             "راجع صلاحية Contents: Read and write للتوكن على نفس المستودع."
              if is_ar else
-             "Could not save to GitHub. Changes are temporary in this browser session until GitHub settings are fixed.")
+             "Could not save to GitHub. Read access works, but write access is missing or misconfigured. "
+             "Grant the token Contents: Read and write for this exact repository.")
         )
+        with st.expander("تفاصيل خطأ الحفظ" if is_ar else "Save error details"):
+            st.code(detail)
         return False
 
 
@@ -368,7 +373,8 @@ def ensure_seed(db: Dict[str, Any]) -> Dict[str, Any]:
             "approvals": [],
         })
         audit(db, event_id, "seed_created", f"Demo event initialized at step {step}", "system")
-    save_db(db, "Seed Mubadara demo events")
+    # Demo cards are for preview only. Do NOT auto-write them to GitHub on page load.
+    # Real user actions (new requests, approvals, notes, uploads, etc.) still save automatically.
     st.session_state.fallback_db = deepcopy(db)
     return db
 

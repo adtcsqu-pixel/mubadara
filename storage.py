@@ -80,6 +80,7 @@ class GitHubStorage:
         self._resolved_branch: Optional[str] = None
         self._repo_is_empty: Optional[bool] = None
         self._last_error: str = ""
+        self._last_write_error: str = ""
 
     @property
     def mode(self) -> str:
@@ -101,6 +102,13 @@ class GitHubStorage:
                     "GitHub API 404: repository/branch was not found or the token cannot access it. "
                     f"Check repo='{self.repo}', branch='{self.branch}', and grant the token Contents: Read and write. "
                     f"GitHub message: {detail or 'Not Found'}"
+                )
+            if response.status_code == 403:
+                raise StorageError(
+                    "GitHub API 403: the repository can be reached, but this token is not allowed to write. "
+                    "For a fine-grained token, select this repository explicitly and set Repository permissions > "
+                    "Contents to Read and write. "
+                    f"GitHub message: {detail or 'Forbidden'}"
                 )
             raise StorageError(f"GitHub API {response.status_code}: {detail}")
         return response
@@ -222,7 +230,9 @@ class GitHubStorage:
 
         try:
             self._request("PUT", f"{self.api}/contents/{path}", json=payload)
+            self._last_write_error = ""
         except StorageError as exc:
+            self._last_write_error = str(exc)
             # GitHub commonly returns 404 for private repositories when a token
             # lacks the required fine-grained Contents: write permission.  Keep
             # the message actionable and never expose the token itself.
