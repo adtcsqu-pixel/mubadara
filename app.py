@@ -135,6 +135,12 @@ if "selected_event" not in st.session_state:
     st.session_state.selected_event = None
 if "flash" not in st.session_state:
     st.session_state.flash = None
+if "fallback_db" not in st.session_state:
+    st.session_state.fallback_db = None
+if "storage_error_detail" not in st.session_state:
+    st.session_state.storage_error_detail = None
+if "storage_persistent" not in st.session_state:
+    st.session_state.storage_persistent = True
 
 lang = st.session_state.lang
 t = TRANSLATIONS[lang]
@@ -277,27 +283,42 @@ def step_label(step: int) -> str:
     return tx(STEPS[step - 1])
 
 
+def _remember_unsynced_db(db: Dict[str, Any], detail: str) -> Dict[str, Any]:
+    """Keep the current session usable without pretending data is persisted."""
+    st.session_state.fallback_db = deepcopy(db)
+    st.session_state.storage_error_detail = detail
+    st.session_state.storage_persistent = False
+    return st.session_state.fallback_db
+
+
 def load_db() -> Dict[str, Any]:
     try:
-        return storage.load_db()
-    except StorageError as exc:
-        st.error(f"{tx('storage_error')}: {exc}")
-        if storage.mode == "github":
-            if is_ar:
-                st.info("تحقق من Streamlit Secrets: اسم المستودع بصيغة owner/repo، والفرع main، وأن GitHub Token لديه صلاحية Contents: Read and write. إذا كان المستودع جديداً وفارغاً، هذه النسخة تهيئه تلقائياً عند أول حفظ.")
-            else:
-                st.info("Check Streamlit Secrets: repository must be owner/repo, branch main, and the GitHub token needs Contents: Read and write. If the repository is new and empty, this version initializes it automatically on the first write.")
-        if st.button("إعادة المحاولة" if is_ar else "Retry", key="storage_retry"):
-            st.rerun()
-        st.stop()
+        db = storage.load_db()
+        st.session_state.storage_error_detail = None
+        st.session_state.storage_persistent = True
+        st.session_state.fallback_db = deepcopy(db)
+        return db
+    except Exception as exc:
+        detail = str(exc)
+        if st.session_state.fallback_db is None:
+            st.session_state.fallback_db = deepcopy({"schema_version": 1, "events": [], "notes": [], "audit": []})
+        return _remember_unsynced_db(st.session_state.fallback_db, detail)
 
 
 def save_db(db: Dict[str, Any], message: str) -> bool:
     try:
         storage.save_db(db, message)
+        st.session_state.fallback_db = deepcopy(db)
+        st.session_state.storage_error_detail = None
+        st.session_state.storage_persistent = True
         return True
-    except StorageError as exc:
-        st.error(f"{tx('storage_error')}: {exc}")
+    except Exception as exc:
+        _remember_unsynced_db(db, str(exc))
+        st.error(
+            ("تعذر الحفظ في GitHub. التغييرات موجودة مؤقتاً في هذه الجلسة فقط حتى يتم إصلاح إعدادات GitHub."
+             if is_ar else
+             "Could not save to GitHub. Changes are temporary in this browser session until GitHub settings are fixed.")
+        )
         return False
 
 
@@ -348,6 +369,7 @@ def ensure_seed(db: Dict[str, Any]) -> Dict[str, Any]:
         })
         audit(db, event_id, "seed_created", f"Demo event initialized at step {step}", "system")
     save_db(db, "Seed Mubadara demo events")
+    st.session_state.fallback_db = deepcopy(db)
     return db
 
 
@@ -394,6 +416,9 @@ def header() -> None:
         if storage.mode == "local":
             css_class = "sync-local"
             sync_text = tx("local_mode")
+        elif not st.session_state.storage_persistent:
+            css_class = "sync-error"
+            sync_text = "غير متزامن" if is_ar else "Not synced"
         elif ok:
             css_class = "sync-ok"
             sync_text = tx("connected")
@@ -760,6 +785,30 @@ def placeholder_role(db: Dict[str, Any]) -> None:
 
 
 header()
+
+if st.session_state.storage_error_detail:
+    if is_ar:
+        st.warning(
+            "⚠️ النظام يعمل حالياً في وضع مؤقت لأن الحفظ في GitHub غير متاح. "
+            "لن يتم اعتبار أي تغيير محفوظاً نهائياً حتى يتم إصلاح المستودع أو الصلاحيات."
+        )
+        with st.expander("تفاصيل مشكلة GitHub"):
+            st.code(st.session_state.storage_error_detail)
+            st.markdown(
+                "تأكد من أن `repo` مكتوب بصيغة `owner/repository` وأن Fine-grained token "
+                "مسموح له بالمستودع نفسه وبصلاحية **Contents: Read and write**."
+            )
+    else:
+        st.warning(
+            "⚠️ The app is running in temporary mode because GitHub persistence is unavailable. "
+            "Changes are not permanently saved until repository permissions are fixed."
+        )
+        with st.expander("GitHub error details"):
+            st.code(st.session_state.storage_error_detail)
+            st.markdown(
+                "Verify `repo` is `owner/repository` and the fine-grained token is explicitly allowed "
+                "to that repository with **Contents: Read and write**."
+            )
 
 if st.session_state.flash:
     st.success(st.session_state.flash)

@@ -79,6 +79,7 @@ class GitHubStorage:
         self.db_path = "data/db.json"
         self._resolved_branch: Optional[str] = None
         self._repo_is_empty: Optional[bool] = None
+        self._last_error: str = ""
 
     @property
     def mode(self) -> str:
@@ -155,12 +156,25 @@ class GitHubStorage:
         )
 
     def healthcheck(self) -> Tuple[bool, str]:
+        """Check that the repository is reachable without mutating it.
+
+        This intentionally does not claim that writes are guaranteed; GitHub may
+        still hide a missing fine-grained Contents:write permission behind 404.
+        """
         try:
+            info = self._repo_info()
+            permissions = info.get("permissions") or {}
+            if permissions and permissions.get("push") is False:
+                return False, (
+                    f"{self.repo}: repository is readable but the authenticated account/token "
+                    "does not have push/write access."
+                )
+            if self._repo_is_empty:
+                return True, f"{self.repo} (reachable; empty repository, first write will initialize it)"
             branch = self._resolve_branch()
-            if branch is None:
-                return True, f"{self.repo} (empty repository; ready to initialize)"
-            return True, f"{self.repo} · {branch}"
+            return True, f"{self.repo} · {branch or self.branch}"
         except StorageError as exc:
+            self._last_error = str(exc)
             return False, str(exc)
 
     def _get_file(self, path: str) -> Optional[Dict[str, Any]]:
@@ -206,7 +220,21 @@ class GitHubStorage:
         if current and current.get("sha"):
             payload["sha"] = current["sha"]
 
-        self._request("PUT", f"{self.api}/contents/{path}", json=payload)
+        try:
+            self._request("PUT", f"{self.api}/contents/{path}", json=payload)
+        except StorageError as exc:
+            # GitHub commonly returns 404 for private repositories when a token
+            # lacks the required fine-grained Contents: write permission.  Keep
+            # the message actionable and never expose the token itself.
+            msg = str(exc)
+            if "404" in msg:
+                raise StorageError(
+                    f"GitHub write failed for '{self.repo}'. The repository may be private, "
+                    "the repo value may be wrong, or the token may not have Contents: Read and write. "
+                    "Verify that the token is explicitly allowed to this repository and that branch "
+                    f"'{self.branch}' exists (or leave an empty repository to be initialized)."
+                ) from exc
+            raise
 
         # The first write to an empty repository creates its default branch.
         if self._repo_is_empty:
@@ -217,9 +245,10 @@ class GitHubStorage:
     def load_db(self) -> Dict[str, Any]:
         current = self._get_file(self.db_path)
         if current is None:
-            db = deepcopy(DEFAULT_DB)
-            self.save_db(db, "Initialize Mubadara data store")
-            return db
+            # Do not write while merely opening the dashboard. This keeps login
+            # usable even when a GitHub token is read-only/misconfigured. The
+            # first actual save (or demo seed save) will initialize data/db.json.
+            return deepcopy(DEFAULT_DB)
         try:
             raw = base64.b64decode(current["content"])
             db = json.loads(raw.decode("utf-8"))
