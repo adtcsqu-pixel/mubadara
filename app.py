@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
+import hmac
 import html
 import os
 import uuid
 from copy import deepcopy
 from datetime import date, datetime, time
+from pathlib import Path
 from typing import Any, Dict, List
 
 import streamlit as st
@@ -35,6 +38,21 @@ def secret_get(path: List[str], default: str = "") -> str:
     except Exception:
         env_name = "_".join(path).upper()
         return os.getenv(env_name, default)
+
+
+ADMIN_USER = secret_get(["auth", "admin_user"], os.getenv("ADMIN_USER", "admin"))
+ADMIN_PASSWORD = secret_get(["auth", "admin_password"], os.getenv("ADMIN_PASSWORD", "Mubadara@2026"))
+
+
+def image_data_uri(path: str) -> str:
+    """Return a local image as an inline data URI for reliable centered rendering."""
+    try:
+        raw = Path(path).read_bytes()
+        suffix = Path(path).suffix.lower().lstrip(".") or "png"
+        mime = "image/jpeg" if suffix in {"jpg", "jpeg"} else f"image/{suffix}"
+        return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+    except Exception:
+        return ""
 
 
 def build_storage():
@@ -149,7 +167,12 @@ def inject_css() -> None:
         [data-baseweb="input"] > div, [data-baseweb="select"] > div, textarea {{ border-radius:12px !important; }}
         [data-testid="stFileUploaderDropzone"] {{ border-radius:16px; border-color:#D9C483; background:#FFFCF5; }}
         [data-testid="stDialog"] > div {{ border-radius:22px !important; }}
-        .login-shell {{ max-width:760px; margin:3vh auto 0; }}
+        .login-shell {{ max-width:760px; margin:2vh auto 0; }}
+        .login-logo-wrap {{ display:flex; justify-content:center; align-items:center; min-height:132px; padding:6px 0 10px; }}
+        .login-logo {{ width:126px; height:126px; object-fit:contain; display:block; filter:drop-shadow(0 8px 18px rgba(11,35,65,.10)); }}
+        .login-brand {{ max-width:1040px; margin:0 auto 18px; text-align:center; }}
+        .login-brand .brand-kicker, .login-brand .brand-title, .login-brand .brand-subtitle {{ text-align:center; }}
+        .login-controls {{ margin-bottom:4px; }}
         .login-title {{ color:{NAVY}; font-weight:800; font-size:1.5rem; text-align:center; margin-bottom:4px; }}
         .login-hint {{ color:#667085; text-align:center; margin-bottom:18px; }}
         .sync-ok {{ color:#137333; font-weight:700; font-size:.82rem; }}
@@ -159,6 +182,8 @@ def inject_css() -> None:
         @media (max-width: 768px) {{
           .block-container {{ padding-left:.8rem; padding-right:.8rem; }}
           .brand-header {{ border-radius:16px; padding:13px; }}
+          .login-logo-wrap {{ min-height:104px; padding-top:0; }}
+          .login-logo {{ width:96px; height:96px; }}
           .section-card {{ border-radius:16px; padding:14px; }}
           .event-card {{ min-height:auto; }}
         }}
@@ -262,9 +287,41 @@ def ensure_seed(db: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def header() -> None:
+    # Login page: keep the university/college emblem visually centered.
+    if not st.session_state.role:
+        c_lang, c_logo, c_sync = st.columns([1.25, 4.5, 1.25], vertical_alignment="center")
+        with c_lang:
+            if st.button(tx("language"), use_container_width=True, key="lang_toggle"):
+                st.session_state.lang = "en" if lang == "ar" else "ar"
+                st.rerun()
+        with c_logo:
+            logo_uri = image_data_uri("assets/squ-ceps-emblem.png")
+            if logo_uri:
+                st.markdown(
+                    f'<div class="login-logo-wrap"><img class="login-logo" src="{logo_uri}" alt="SQU CEPS logo"></div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.image("assets/squ-ceps-emblem.png", width=120)
+        with c_sync:
+            sync_class = "sync-ok" if storage.mode == "github" else "sync-local"
+            sync_text = tx("connected") if storage.mode == "github" else tx("local_mode")
+            st.markdown(f'<div class="{sync_class}">● {tx("github_sync")}: {sync_text}</div>', unsafe_allow_html=True)
+
+        st.markdown(
+            f"""<div class="brand-header login-brand">
+              <div class="brand-kicker">{html.escape(tx('university'))}</div>
+              <div class="brand-title">{html.escape(tx('title'))}</div>
+              <div class="brand-subtitle">{html.escape(tx('subtitle'))}</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+        return
+
+    # Authenticated views retain a compact navigation header.
     c_logo, c_text, c_lang = st.columns([1.1, 7, 1.2], vertical_alignment="center")
     with c_logo:
-        st.image("assets/squ-ceps-logo.png", width=100)
+        st.image("assets/squ-ceps-emblem.png", width=92)
     with c_text:
         st.markdown(
             f"""<div class="brand-header">
@@ -281,11 +338,10 @@ def header() -> None:
         sync_class = "sync-ok" if storage.mode == "github" else "sync-local"
         sync_text = tx("connected") if storage.mode == "github" else tx("local_mode")
         st.markdown(f'<div class="{sync_class}">● {tx("github_sync")}: {sync_text}</div>', unsafe_allow_html=True)
-        if st.session_state.role:
-            if st.button(tx("logout"), use_container_width=True, key="logout"):
-                st.session_state.role = None
-                st.session_state.selected_event = None
-                st.rerun()
+        if st.button(tx("logout"), use_container_width=True, key="logout"):
+            st.session_state.role = None
+            st.session_state.selected_event = None
+            st.rerun()
 
 
 def login_view() -> None:
@@ -293,11 +349,15 @@ def login_view() -> None:
     st.markdown(f'<div class="login-title">{tx("login")}</div><div class="login-hint">{tx("login_hint")}</div>', unsafe_allow_html=True)
     with st.container(border=True):
         user_id = st.text_input(tx("user_id"), placeholder=tx("user_id"))
-        _ = st.text_input(tx("password"), type="password", placeholder="••••••••")
+        password = st.text_input(tx("password"), type="password", placeholder="••••••••")
         if st.button(tx("sign_in"), type="primary", use_container_width=True):
-            # Demo credentials route to the Assistant Dean view.
-            st.session_state.role = "assistantDean" if user_id else "studentGroup"
-            st.rerun()
+            valid_user = hmac.compare_digest(user_id.strip(), ADMIN_USER)
+            valid_password = hmac.compare_digest(password, ADMIN_PASSWORD)
+            if valid_user and valid_password:
+                st.session_state.role = "assistantDean"
+                st.rerun()
+            else:
+                st.error(tx("invalid_credentials"))
         st.markdown(f"**{tx('demo_roles')}**")
         cols = st.columns(2)
         roles = [
