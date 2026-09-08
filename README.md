@@ -103,3 +103,6 @@ allow_default_admin = false
 - Fixed `Event not found` when opening details for demo events shown on an empty data store.
 - Event Details now resolves the same seeded/session event data rendered by the dashboard.
 - Dialog title and missing-event message respect AR/EN.
+
+## V9 storage fix
+This version writes updates through GitHub's Git Data API (blob/tree/commit/ref) for established repositories. This avoids the Contents API requirement to supply the existing file SHA, which caused `422: \"sha\" wasn't supplied` in some deployments. Empty repositories are still initialized with the Contents API for the first commit.
